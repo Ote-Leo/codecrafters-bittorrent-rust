@@ -1,49 +1,95 @@
 use serde_json;
+use serde_json::json;
 use std::env;
 use std::str::FromStr;
 
 // Available if you need it!
 // use serde_bencode
 
-fn decode_bencode_string(encoded_value: &str) -> serde_json::Value {
-    let colon_index = encoded_value.find(':').unwrap();
-    let number_string = &encoded_value[..colon_index];
-    let length = number_string.parse::<i64>().unwrap();
-    let string = &encoded_value[colon_index + 1..colon_index + 1 + length as usize];
-    serde_json::Value::String(string.to_string())
+struct BenCodeParser<'a> {
+    source: &'a str,
+    idx: usize,
 }
 
-fn decode_bencode_integer(encoded_value: &str) -> serde_json::Value {
-    if let Some(end_index) = encoded_value.find('e') {
-        let number_string = &encoded_value[1..end_index];
-
-        if number_string.len() == 0 {
-            panic!("Empty number string {}", encoded_value)
-        } else if number_string.starts_with("0") && number_string.len() != 1 {
-            panic!("Numbers cannot start with a leading zero: {}", encoded_value)
-        } else if number_string.starts_with("-0") {
-            panic!("Illegal starting pattern `-0`: {}", encoded_value)
-        } else if number_string.contains('.') {
-            panic!("floatind point: {}", encoded_value)
+impl<'a> From<&'a str> for BenCodeParser<'a> {
+    fn from(value: &'a str) -> Self {
+        Self {
+            source: value,
+            idx: 0,
         }
+    }
+}
 
-        match serde_json::value::Number::from_str(number_string) {
-            Ok(number) => serde_json::Value::Number(number),
-            err => panic!("Couldn't parse {} as a number; due to {:#?}", number_string, err)
+#[derive(Debug)]
+struct ParseError;
+
+impl<'a> BenCodeParser<'a> {
+    fn parse(&mut self) -> Result<serde_json::Value, ParseError> {
+        match self.source.chars().nth(self.idx) {
+            Some('l') => {
+                self.idx += 1;
+                let mut arr = Vec::new();
+
+                while let Ok(value) = self.parse() {
+                    arr.push(value);
+                }
+
+                if let Some('e') = self.next() {
+                    Ok(serde_json::Value::Array(arr))
+                } else {
+                    Err(ParseError)
+                }
+            },
+            Some('d') => todo!(),
+            Some('i') => self.parse_integer(),
+            Some(num) if num.is_digit(10) => self.parse_string(),
+            _ => Err(ParseError),
         }
-    } else {
-        panic!("input {} doesn't end with an `e`", encoded_value)
+    }
+
+    fn parse_string(&mut self) -> Result<serde_json::Value, ParseError> {
+        let source = &self.source[self.idx..];
+        match source.chars().nth(0) {
+            Some(num) if num.is_digit(10) => {
+                let colon_index = source.find(':').unwrap();
+                let number_string = &source[..colon_index];
+                let length = number_string.parse::<u64>().unwrap();
+                let start = colon_index + 1;
+                let end = start + length as usize;
+                let string = &source[start..end];
+                self.idx += end;
+                Ok(serde_json::Value::String(string.to_string()))
+            }
+            _ => Err(ParseError),
+        }
+    }
+
+    fn parse_integer(&mut self) -> Result<serde_json::Value, ParseError> {
+        let source = &self.source[self.idx..];
+        match source.find('e') {
+            Some(end) => {
+                let number_string = &source[1..end];
+                serde_json::value::Number::from_str(number_string)
+                    .map(|num| {
+                        self.idx += end + 1;
+                        serde_json::Value::Number(num)
+                    })
+                    .map_err(|_| ParseError)
+            }
+            _ => Err(ParseError),
+        }
+    }
+
+    fn next(&mut self) -> Option<char> {
+        let res = self.source.chars().nth(self.idx);
+        self.idx += 1;
+        res
     }
 }
 
 
 fn decode_bencoded_value(encoded_value: &str) -> serde_json::Value {
-    match encoded_value.chars().next() {
-        Some(number) if number.is_digit(10) => decode_bencode_string(encoded_value),
-        Some('i') => decode_bencode_integer(encoded_value),
-        Some(_) => panic!("Unhandled encoded value: {}", encoded_value),
-        None => panic!("Empty String")
-    }
+    BenCodeParser::from(encoded_value).parse().unwrap()
 }
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
