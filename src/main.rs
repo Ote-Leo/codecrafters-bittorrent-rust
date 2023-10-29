@@ -52,7 +52,7 @@ impl<'a> BenCodeParser<'a> {
                 } else {
                     Err(ParseError)
                 }
-            },
+            }
             Some('i') => self.parse_integer(),
             Some(num) if num.is_ascii_digit() => self.parse_string(),
             _ => Err(ParseError),
