@@ -38,7 +38,21 @@ impl<'a> BenCodeParser<'a> {
                     Err(ParseError)
                 }
             }
-            Some('d') => todo!(),
+            Some('d') => {
+                self.idx += 1;
+                let mut map = serde_json::Map::new();
+
+                while let Ok(serde_json::Value::String(key)) = self.parse_string() {
+                    let value = self.parse()?;
+                    map.insert(key, value);
+                }
+
+                if let Some('e') = self.next() {
+                    Ok(serde_json::Value::Object(map))
+                } else {
+                    Err(ParseError)
+                }
+            },
             Some('i') => self.parse_integer(),
             Some(num) if num.is_ascii_digit() => self.parse_string(),
             _ => Err(ParseError),
