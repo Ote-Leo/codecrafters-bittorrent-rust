@@ -6,12 +6,22 @@ use std::str::FromStr;
 // use serde_bencode
 
 struct BenCodeParser<'a> {
-    source: &'a str,
+    source: &'a [u8],
     idx: usize,
 }
 
 impl<'a> From<&'a str> for BenCodeParser<'a> {
     fn from(value: &'a str) -> Self {
+        Self {
+            source: value.as_bytes(),
+            idx: 0,
+        }
+    }
+}
+
+
+impl<'a> From<&'a [u8]> for BenCodeParser<'a> {
+    fn from(value: &'a [u8]) -> Self {
         Self {
             source: value,
             idx: 0,
@@ -24,8 +34,8 @@ struct ParseError;
 
 impl<'a> BenCodeParser<'a> {
     fn parse(&mut self) -> Result<serde_json::Value, ParseError> {
-        match self.source.chars().nth(self.idx) {
-            Some('l') => {
+        match self.source.get(self.idx) {
+            Some(b'l') => {
                 self.idx += 1;
                 let mut arr = Vec::new();
 
@@ -33,13 +43,13 @@ impl<'a> BenCodeParser<'a> {
                     arr.push(value);
                 }
 
-                if let Some('e') = self.next() {
+                if let Some(b'e') = self.next() {
                     Ok(serde_json::Value::Array(arr))
                 } else {
                     Err(ParseError)
                 }
             }
-            Some('d') => {
+            Some(b'd') => {
                 self.idx += 1;
                 let mut map = serde_json::Map::new();
 
@@ -48,13 +58,13 @@ impl<'a> BenCodeParser<'a> {
                     map.insert(key, value);
                 }
 
-                if let Some('e') = self.next() {
+                if let Some(b'e') = self.next() {
                     Ok(serde_json::Value::Object(map))
                 } else {
                     Err(ParseError)
                 }
             }
-            Some('i') => self.parse_integer(),
+            Some(b'i') => self.parse_integer(),
             Some(num) if num.is_ascii_digit() => self.parse_string(),
             _ => Err(ParseError),
         }
@@ -62,16 +72,16 @@ impl<'a> BenCodeParser<'a> {
 
     fn parse_string(&mut self) -> Result<serde_json::Value, ParseError> {
         let source = &self.source[self.idx..];
-        match source.chars().nth(0) {
+        match source.get(0) {
             Some(num) if num.is_ascii_digit() => {
-                let colon_index = source.find(':').unwrap();
-                let number_string = &source[..colon_index];
+                let colon_index = source.iter().position(|&byte| byte == b':').unwrap();
+                let number_string = std::str::from_utf8(&source[..colon_index]).unwrap();
                 let length = number_string.parse::<u64>().unwrap();
                 let start = colon_index + 1;
                 let end = start + length as usize;
-                let string = &source[start..end];
+                let string = source[start..end].iter().map(|&byte| byte as char).collect::<String>();
                 self.idx += end;
-                Ok(serde_json::Value::String(string.to_string()))
+                Ok(serde_json::Value::String(string))
             }
             _ => Err(ParseError),
         }
@@ -79,9 +89,9 @@ impl<'a> BenCodeParser<'a> {
 
     fn parse_integer(&mut self) -> Result<serde_json::Value, ParseError> {
         let source = &self.source[self.idx..];
-        match source.find('e') {
+        match source.iter().position(|&byte| byte == b'e') {
             Some(end) => {
-                let number_string = &source[1..end];
+                let number_string = std::str::from_utf8(&source[1..end]).unwrap();
                 serde_json::value::Number::from_str(number_string)
                     .map(|num| {
                         self.idx += end + 1;
@@ -93,8 +103,8 @@ impl<'a> BenCodeParser<'a> {
         }
     }
 
-    fn next(&mut self) -> Option<char> {
-        let res = self.source.chars().nth(self.idx);
+    fn next(&mut self) -> Option<&u8> {
+        let res = self.source.get(self.idx);
         self.idx += 1;
         res
     }
