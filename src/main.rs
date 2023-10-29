@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Read;
 use std::str::FromStr;
 
 // Available if you need it!
@@ -116,6 +117,22 @@ fn main() {
         let encoded_value = &args[2];
         let decoded_value = decode_bencoded_value(encoded_value);
         println!("{decoded_value}");
+    } else if command == "info" {
+        let mut file = std::fs::File::open(&args[2]).unwrap();
+        let mut buf = Vec::new();
+        let _ = file.read_to_end(&mut buf);
+        let encoded_value = buf.iter().map(|byte| *byte as char).collect::<String>();
+        let decoded_value = decode_bencoded_value(&encoded_value);
+
+        let announce = decoded_value.get("announce").unwrap();
+        if let serde_json::Value::String(url) = announce {
+            println!("Tracker URL: {url}");
+        }
+        let info = decoded_value.get("info").unwrap();
+        let length = info.get("length").unwrap();
+        if let serde_json::Value::Number(length) = length {
+            println!("Length: {length}");
+        }
     } else {
         println!("unknown command: {}", args[1])
     }
