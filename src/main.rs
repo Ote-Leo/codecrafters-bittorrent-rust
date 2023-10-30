@@ -162,7 +162,7 @@ mod bencode_decoding {
         fn basic_string() {
             let input = "6:orange";
             let expected = json!("orange");
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
 
@@ -170,7 +170,7 @@ mod bencode_decoding {
         fn basic_url() {
             let input = "55:http://bittorrent-test-tracker.codecrafters.io/announce";
             let expected = json!("http://bittorrent-test-tracker.codecrafters.io/announce");
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
     }
@@ -185,7 +185,7 @@ mod bencode_decoding {
         fn positive_i32_integer() {
             let input = "i1249266168e";
             let expected = json!(1249266168);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
 
@@ -193,7 +193,7 @@ mod bencode_decoding {
         fn positive_i64_integer() {
             let input = "i4294967300e";
             let expected = json!(4294967300i64);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
 
@@ -201,7 +201,7 @@ mod bencode_decoding {
         fn negative_i32_integer() {
             let input = "i-52e";
             let expected = json!(-52);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
     }
@@ -216,7 +216,7 @@ mod bencode_decoding {
         fn empty_list() {
             let input = "le";
             let expected = json!([]);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
 
@@ -224,12 +224,12 @@ mod bencode_decoding {
         fn linear_list() {
             let input = "l9:pineapplei261ee";
             let expected = json!(["pineapple", 261]);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
 
             let input = "li261e9:pineapplee";
             let expected = json!([261, "pineapple"]);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
 
@@ -237,7 +237,7 @@ mod bencode_decoding {
         fn nested_list() {
             let input = "lli4eei5ee";
             let expected = json!([[4], 5]);
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
     }
@@ -252,7 +252,7 @@ mod bencode_decoding {
         fn empty_dictionary() {
             let input = "de";
             let expected = json!({});
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output)
         }
 
@@ -260,15 +260,16 @@ mod bencode_decoding {
         fn linear_dictionary() {
             let input = "d3:foo5:grape5:helloi52ee";
             let expected = json!({"foo":"grape","hello":52});
-            let output = decode_bencoded_value(input);
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
 
         #[test]
         fn nested_dictionary() {
             let input = "d10:inner_dictd4:key16:value14:key2i42e8:list_keyl5:item15:item2i3eeee";
-            let expected = json!({"inner_dict":{"key1":"value1","key2":42,"list_key":["item1","item2",3]}});
-            let output = decode_bencoded_value(input);
+            let expected =
+                json!({"inner_dict":{"key1":"value1","key2":42,"list_key":["item1","item2",3]}});
+            let output = decode_bencoded_value(input.as_ref());
             assert_eq!(expected, output);
         }
     }
