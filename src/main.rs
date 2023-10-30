@@ -1,22 +1,21 @@
+use sha1::{Digest, Sha1};
 use std::env;
 use std::io::Read;
 
-fn decode_bencoded_value(encoded_value: &[u8]) -> serde_json::Value {
-    let bencode = serde_bencode::from_bytes(encoded_value).unwrap_or_else(|err| {
+fn decode_bencoded_value(encoded_value: &[u8]) -> serde_bencode::value::Value {
+    serde_bencode::from_bytes(encoded_value).unwrap_or_else(|err| {
         panic!(
             "could decode input {}\n\n\t{err}\n\n",
             std::string::String::from_utf8_lossy(encoded_value)
         )
-    });
-
-    bencode_to_json(bencode)
+    })
 }
 
-fn bencode_to_json(bencode: serde_bencode::value::Value) -> serde_json::Value {
+fn bencode_to_json(bencode: &serde_bencode::value::Value) -> serde_json::Value {
     use serde_bencode::value::Value;
     match bencode {
-        Value::Bytes(bytes) => serde_json::Value::String(String::from_utf8_lossy(&bytes).into()),
-        Value::Int(num) => serde_json::Value::Number(serde_json::value::Number::from(num)),
+        Value::Bytes(bytes) => serde_json::Value::String(String::from_utf8_lossy(bytes).into()),
+        Value::Int(num) => serde_json::Value::Number(serde_json::value::Number::from(*num)),
         Value::List(list) => {
             let mut arr = Vec::new();
             for elem in list {
@@ -28,7 +27,7 @@ fn bencode_to_json(bencode: serde_bencode::value::Value) -> serde_json::Value {
             let mut map = serde_json::value::Map::new();
 
             for (key, value) in dict {
-                let key = String::from_utf8_lossy(&key);
+                let key = String::from_utf8_lossy(key);
                 let value = bencode_to_json(value);
                 map.insert(key.into(), value);
             }
@@ -45,26 +44,43 @@ fn main() {
 
     if command == "decode" {
         // You can use print statements as follows for debugging, they'll be visible when running tests.
-        // println!("Logs from your program will appear here!");
+        eprintln!("Logs from your program will appear here!");
 
         // Uncomment this block to pass the first stage
         let encoded_value = &args[2];
         let decoded_value = decode_bencoded_value(encoded_value.as_ref());
-        println!("{decoded_value}");
+        let decoded_json = bencode_to_json(&decoded_value);
+        println!("{decoded_json}");
     } else if command == "info" {
         let mut file = std::fs::File::open(&args[2]).unwrap();
         let mut buf = Vec::new();
         let _buf_length = file.read_to_end(&mut buf);
         let decoded_value = decode_bencoded_value(buf.as_ref());
+        let decoded_json = bencode_to_json(&decoded_value);
 
-        let announce = decoded_value.get("announce").unwrap();
+        let announce = decoded_json.get("announce").unwrap();
         if let serde_json::Value::String(url) = announce {
             println!("Tracker URL: {url}");
         }
-        let info = decoded_value.get("info").unwrap();
+        let info = decoded_json.get("info").unwrap();
         let length = info.get("length").unwrap();
         if let serde_json::Value::Number(length) = length {
             println!("Length: {length}");
+        }
+
+        use serde_bencode::value::Value;
+        let mut hasher = Sha1::new();
+        if let Value::Dict(meta) = decoded_value {
+            if let Some(dict) = meta.get("info".as_bytes()) {
+                let bytes = serde_bencode::to_bytes(dict).unwrap();
+                hasher.update(bytes);
+                let result = hasher.finalize();
+                let result = result
+                    .iter()
+                    .map(|byte| format!("{byte:02x?}"))
+                    .collect::<String>();
+                println!("Info Hash: {result}");
+            }
         }
     } else {
         println!("unknown command: {}", args[1])
@@ -86,7 +102,7 @@ mod bencode_decoding {
             let input = "6:orange";
             let expected = json!("orange");
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
 
         #[test]
@@ -94,7 +110,7 @@ mod bencode_decoding {
             let input = "55:http://bittorrent-test-tracker.codecrafters.io/announce";
             let expected = json!("http://bittorrent-test-tracker.codecrafters.io/announce");
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
     }
 
@@ -109,7 +125,7 @@ mod bencode_decoding {
             let input = "i1249266168e";
             let expected = json!(1249266168);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
 
         #[test]
@@ -117,7 +133,7 @@ mod bencode_decoding {
             let input = "i4294967300e";
             let expected = json!(4294967300i64);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
 
         #[test]
@@ -125,7 +141,7 @@ mod bencode_decoding {
             let input = "i-52e";
             let expected = json!(-52);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
     }
 
@@ -140,7 +156,7 @@ mod bencode_decoding {
             let input = "le";
             let expected = json!([]);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
 
         #[test]
@@ -148,12 +164,12 @@ mod bencode_decoding {
             let input = "l9:pineapplei261ee";
             let expected = json!(["pineapple", 261]);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
 
             let input = "li261e9:pineapplee";
             let expected = json!([261, "pineapple"]);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
 
         #[test]
@@ -161,7 +177,7 @@ mod bencode_decoding {
             let input = "lli4eei5ee";
             let expected = json!([[4], 5]);
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
     }
 
@@ -176,7 +192,7 @@ mod bencode_decoding {
             let input = "de";
             let expected = json!({});
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output)
+            assert_eq!(expected, bencode_to_json(&output))
         }
 
         #[test]
@@ -184,7 +200,7 @@ mod bencode_decoding {
             let input = "d3:foo5:grape5:helloi52ee";
             let expected = json!({"foo":"grape","hello":52});
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
 
         #[test]
@@ -193,7 +209,7 @@ mod bencode_decoding {
             let expected =
                 json!({"inner_dict":{"key1":"value1","key2":42,"list_key":["item1","item2",3]}});
             let output = decode_bencoded_value(input.as_ref());
-            assert_eq!(expected, output);
+            assert_eq!(expected, bencode_to_json(&output));
         }
     }
 
@@ -211,15 +227,32 @@ mod bencode_decoding {
 
             let expected_tracker = json!("http://bittorrent-test-tracker.codecrafters.io/announce");
             let expected_length = json!(92063);
+            let expected_hash = "d69f91e6b2ae4c542468d1073a71d4ea13879a7f";
 
             let decoded_value = decode_bencoded_value(buf.as_ref());
+            let decoded_json = bencode_to_json(&decoded_value);
 
-            let output_tracker = decoded_value.get("announce").unwrap();
+            let output_tracker = decoded_json.get("announce").unwrap();
             assert_eq!(expected_tracker, *output_tracker);
 
-            let info = decoded_value.get("info").unwrap();
+            let info = decoded_json.get("info").unwrap();
             let output_length = info.get("length").unwrap();
             assert_eq!(expected_length, *output_length);
+
+            use serde_bencode::value::Value;
+            let mut hasher = Sha1::new();
+            if let Value::Dict(meta) = decoded_value {
+                if let Some(dict) = meta.get("info".as_bytes()) {
+                    let bytes = serde_bencode::to_bytes(dict).unwrap();
+                    hasher.update(bytes);
+                    let output_hash = hasher.finalize();
+                    let output_hash = output_hash
+                        .iter()
+                        .map(|byte| format!("{byte:02x?}"))
+                        .collect::<String>();
+                    assert_eq!(expected_hash, output_hash);
+                }
+            }
         }
     }
 }
