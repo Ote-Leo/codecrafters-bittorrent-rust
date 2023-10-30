@@ -272,4 +272,30 @@ mod bencode_decoding {
             assert_eq!(expected, output);
         }
     }
+
+    #[cfg(test)]
+    mod torrent_file {
+        use serde_json::json;
+
+        use super::*;
+
+        #[test]
+        fn torrent_info() {
+            let mut file = std::fs::File::open("sample.torrent").unwrap();
+            let mut buf = Vec::new();
+            let _buf_length = file.read_to_end(&mut buf);
+
+            let expected_tracker = json!("http://bittorrent-test-tracker.codecrafters.io/announce");
+            let expected_length = json!(92063);
+
+            let decoded_value = decode_bencoded_value(buf.as_ref());
+
+            let output_tracker = decoded_value.get("announce").unwrap();
+            assert_eq!(expected_tracker, *output_tracker);
+
+            let info = decoded_value.get("info").unwrap();
+            let output_length = info.get("length").unwrap();
+            assert_eq!(expected_length, *output_length);
+        }
+    }
 }
