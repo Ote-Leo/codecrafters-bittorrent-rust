@@ -80,6 +80,19 @@ fn main() {
                     .map(|byte| format!("{byte:02x?}"))
                     .collect::<String>();
                 println!("Info Hash: {result}");
+
+                if let Value::Dict(dict) = dict {
+                    if let Value::Int(piece_length) = dict.get("piece length".as_bytes()).unwrap() {
+                        println!("Piece Length: {piece_length}");
+                        if let Value::Bytes(pieces) = dict.get("pieces".as_bytes()).unwrap() {
+                            println!("Piece Hashes:");
+                            for chunk in pieces.chunks(20) {
+                                let hash = chunk.iter().map(|byte| format!("{byte:02x?}")).collect::<String>();
+                                println!("{hash}");
+                            }
+                        }
+                    }
+                }
             }
         }
     } else {
