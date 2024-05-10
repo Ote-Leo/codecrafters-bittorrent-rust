@@ -1,6 +1,16 @@
+#![allow(unused)]
+use clap::{Parser, Subcommand};
+use reqwest;
+use serde_bencode::value::Value;
 use sha1::{Digest, Sha1};
-use std::env;
-use std::io::Read;
+use std::{
+    env,
+    io::Read,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
+use SubCommand::*;
 
 fn decode_bencoded_value(encoded_value: &[u8]) -> serde_bencode::value::Value {
     serde_bencode::from_bytes(encoded_value).unwrap_or_else(|err| {
@@ -12,7 +22,6 @@ fn decode_bencoded_value(encoded_value: &[u8]) -> serde_bencode::value::Value {
 }
 
 fn bencode_to_json(bencode: &serde_bencode::value::Value) -> serde_json::Value {
-    use serde_bencode::value::Value;
     match bencode {
         Value::Bytes(bytes) => serde_json::Value::String(String::from_utf8_lossy(bytes).into()),
         Value::Int(num) => serde_json::Value::Number(serde_json::value::Number::from(*num)),
@@ -37,66 +46,202 @@ fn bencode_to_json(bencode: &serde_bencode::value::Value) -> serde_json::Value {
     }
 }
 
+fn read_bin_file<P: AsRef<Path>>(path: P) -> Vec<u8> {
+    std::fs::read(path).unwrap()
+}
+
+fn url_encode_infohash(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&byte| {
+            if (b'0' <= byte && byte <= b'9')
+                || (b'A' <= byte && byte <= b'Z')
+                || (b'a' <= byte && byte <= b'z')
+                || byte == b'-'
+                || byte == b'_'
+                || byte == b'.'
+                || byte == b'~'
+            {
+                format!("{}", byte as char)
+            } else {
+                format!("%{byte:02x?}")
+            }
+        })
+        .collect::<String>()
+}
+
+#[derive(Debug, Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: SubCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum SubCommand {
+    /// Decode becoded data into json
+    Decode {
+        /// The bencoded data
+        bencode: String,
+    },
+    /// Extract torrent file info
+    Info {
+        /// Path to the torrent file
+        file_path: PathBuf,
+    },
+    /// Extract torrent file peers
+    Peers {
+        /// Path to the torrent file
+        file_path: PathBuf,
+    },
+}
+
 // Usage: your_bittorrent.sh decode "<encoded_value>"
 fn main() {
     let args: Vec<String> = env::args().collect();
     let command = &args[1];
 
-    if command == "decode" {
-        // You can use print statements as follows for debugging, they'll be visible when running tests.
-        eprintln!("Logs from your program will appear here!");
+    let cli = Cli::parse();
 
-        // Uncomment this block to pass the first stage
-        let encoded_value = &args[2];
-        let decoded_value = decode_bencoded_value(encoded_value.as_ref());
-        let decoded_json = bencode_to_json(&decoded_value);
-        println!("{decoded_json}");
-    } else if command == "info" {
-        let mut file = std::fs::File::open(&args[2]).unwrap();
-        let mut buf = Vec::new();
-        let _buf_length = file.read_to_end(&mut buf);
-        let decoded_value = decode_bencoded_value(buf.as_ref());
-        let decoded_json = bencode_to_json(&decoded_value);
+    match cli.command {
+        Decode { bencode } => println!(
+            "{}",
+            bencode_to_json(&decode_bencoded_value(bencode.as_ref()))
+        ),
+        Info { file_path } => {
+            let buf = read_bin_file(&file_path);
 
-        let announce = decoded_json.get("announce").unwrap();
-        if let serde_json::Value::String(url) = announce {
+            let Value::Dict(meta) = decode_bencoded_value(&buf) else {
+                panic!("No meta dict in torrent file");
+            };
+
+            let url = if let Some(Value::Bytes(url)) = meta.get("announce".as_bytes()) {
+                String::from_utf8_lossy(url)
+            } else {
+                panic!("No urls in the torrent file")
+            };
+
             println!("Tracker URL: {url}");
-        }
-        let info = decoded_json.get("info").unwrap();
-        let length = info.get("length").unwrap();
-        if let serde_json::Value::Number(length) = length {
-            println!("Length: {length}");
-        }
+            let mut hasher = Sha1::new();
+            let (info, info_hash) = if let Some(info) = meta.get("info".as_bytes()) {
+                let info_bytes = serde_bencode::to_bytes(info).unwrap();
+                hasher.update(info_bytes);
+                let info_hash = hasher.finalize();
 
-        use serde_bencode::value::Value;
-        let mut hasher = Sha1::new();
-        if let Value::Dict(meta) = decoded_value {
-            if let Some(dict) = meta.get("info".as_bytes()) {
-                let bytes = serde_bencode::to_bytes(dict).unwrap();
-                hasher.update(bytes);
-                let result = hasher.finalize();
-                let result = result
+                if let Value::Dict(info) = info {
+                    (info, info_hash)
+                } else {
+                    panic!("Fuck this shit")
+                }
+            } else {
+                panic!("No info in torrent file");
+            };
+
+            let length = if let Some(Value::Int(length)) = info.get("length".as_bytes()) {
+                length
+            } else {
+                panic!("No length in the torrent file");
+            };
+            println!("Length: {length}");
+
+            println!(
+                "Info Hash: {}",
+                info_hash
+                    .iter()
+                    .map(|byte| format!("{byte:02x?}"))
+                    .collect::<String>()
+            );
+
+            let piece_length =
+                if let Value::Int(piece_length) = info.get("piece length".as_bytes()).unwrap() {
+                    piece_length
+                } else {
+                    panic!("No piece length in info of torrent");
+                };
+            println!("Piece Length: {piece_length}");
+
+            let pieces = if let Value::Bytes(pieces) = info.get("pieces".as_bytes()).unwrap() {
+                pieces
+            } else {
+                panic!("No pieces in info of torrent");
+            };
+
+            println!("Piece Hashes:");
+            for chunk in pieces.chunks(20) {
+                let hash = chunk
                     .iter()
                     .map(|byte| format!("{byte:02x?}"))
                     .collect::<String>();
-                println!("Info Hash: {result}");
-
-                if let Value::Dict(dict) = dict {
-                    if let Value::Int(piece_length) = dict.get("piece length".as_bytes()).unwrap() {
-                        println!("Piece Length: {piece_length}");
-                        if let Value::Bytes(pieces) = dict.get("pieces".as_bytes()).unwrap() {
-                            println!("Piece Hashes:");
-                            for chunk in pieces.chunks(20) {
-                                let hash = chunk.iter().map(|byte| format!("{byte:02x?}")).collect::<String>();
-                                println!("{hash}");
-                            }
-                        }
-                    }
-                }
+                println!("{hash}");
             }
         }
-    } else {
-        println!("unknown command: {}", args[1])
+        Peers { file_path } => {
+            let buf = read_bin_file(&args[2]);
+            let decoded_value = decode_bencoded_value(buf.as_ref());
+
+            let meta = if let Value::Dict(meta) = decoded_value {
+                meta
+            } else {
+                panic!("No meta dict in torrent file");
+            };
+
+            let tracker_url = if let Some(Value::Bytes(url)) = meta.get("announce".as_bytes()) {
+                String::from_utf8_lossy(url)
+            } else {
+                panic!("No tracker url in torrent file");
+            };
+
+            let mut hasher = Sha1::new();
+            let (info, info_hash) = if let Some(info) = meta.get("info".as_bytes()) {
+                let info_bytes = serde_bencode::to_bytes(info).unwrap();
+                hasher.update(info_bytes);
+                let info_hash = hasher.finalize();
+
+                if let Value::Dict(info) = info {
+                    (info, info_hash)
+                } else {
+                    panic!("Fuck this shit")
+                }
+            } else {
+                panic!("No info in torrent file");
+            };
+
+            let length = if let Some(Value::Int(length)) = info.get("length".as_bytes()) {
+                length
+            } else {
+                panic!("No length in torrent file");
+            };
+
+            let info_hash_url = url_encode_infohash(&info_hash);
+            let peer_id = "36525524767213958416";
+            let port = 6881;
+            let uploaded = 0;
+            let downloaded = 0;
+            let left = length;
+            let compact = 1;
+
+            let query = [
+                ("peer_id", "36525524767213958416".into()),
+                ("downloaded", "0".into()),
+                ("uploaded", "0".into()),
+                ("left", length.to_string()),
+                ("compact", "1".into()),
+            ];
+
+            let mut url = reqwest::Url::from_str(&tracker_url).unwrap();
+            url.set_port(Some(port)).unwrap();
+
+            let client = reqwest::blocking::Client::new();
+            // let request = client
+            //     .get(url)
+            //     .query(&query)
+            //     .query(&[("info_hash", &info_hash)]);
+            //
+            // println!("{request:#?}");
+            //
+            // if let Ok(response) = request.send() {
+            //     println!("{response:?}");
+            // }
+        }
     }
 }
 
