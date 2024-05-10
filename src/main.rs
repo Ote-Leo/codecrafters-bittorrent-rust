@@ -1,8 +1,6 @@
-#![allow(unused)]
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use pieces::Pieces;
-use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_bencode::value::Value as BenValue;
 use serde_json::Value as JsonValue;
@@ -49,9 +47,9 @@ fn url_encode_infohash(bytes: &[u8]) -> String {
     bytes
         .iter()
         .map(|&byte| {
-            if (b'0' <= byte && byte <= b'9')
-                || (b'A' <= byte && byte <= b'Z')
-                || (b'a' <= byte && byte <= b'z')
+            if byte.is_ascii_digit()
+                || byte.is_ascii_uppercase()
+                || byte.is_ascii_lowercase()
                 || byte == b'-'
                 || byte == b'_'
                 || byte == b'.'
@@ -164,35 +162,17 @@ fn calculate_info_hash(torrent: &Torrent) -> anyhow::Result<Vec<u8>> {
 }
 
 fn render_torrent_info(torrent: &Torrent) -> anyhow::Result<()> {
+    let info_hash = calculate_info_hash(torrent).context("calculating info hash")?;
+
     println!("Tracker URL: {}", torrent.announce);
     println!("Length: {}", torrent.content_length());
-
-    let info_bytes = serde_bencode::to_bytes(&torrent.info).context("re-encode info section")?;
-    let info_hash = calculate_info_hash(&torrent).context("calculating info hash")?;
-
-    println!(
-        "Info Hash: {}",
-        info_hash
-            .iter()
-            .map(|byte| format!("{byte:02x?}"))
-            .collect::<String>()
-    );
-
+    println!("Info Hash: {}", hex::encode(info_hash));
     println!("Piece Length: {}", torrent.info.piece_length);
-    let piece_hashes = torrent
-        .info
-        .pieces
-        .0
-        .iter()
-        .map(|chunk| {
-            chunk
-                .iter()
-                .map(|byte| format!("{byte:02x?}"))
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>();
     println!("Piece Hashes:");
-    println!("{}", piece_hashes.join("\n"));
+    for piece in torrent.info.pieces.0.iter() {
+        println!("{}", hex::encode(piece))
+    }
+
     Ok(())
 }
 
@@ -206,13 +186,13 @@ fn main() -> anyhow::Result<()> {
             println!("{}", bencode_to_json(&value));
         }
         SubCommand::Info { file_path } => {
-            let buf = read(&file_path).context("opening torrent file")?;
+            let buf = read(file_path).context("opening torrent file")?;
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
             render_torrent_info(&torrent)?;
         }
         Peers { file_path } => {
             let buf = read(file_path).unwrap();
-            let decoded_value = decode_bencoded_value(&buf);
+            let decoded_value = decode_bencoded_value(buf);
 
             let meta = if let BenValue::Dict(meta) = decoded_value {
                 meta
@@ -475,10 +455,8 @@ mod tests {
 
     #[cfg(test)]
     mod torrent_file {
-        use serde_json::json;
-        use std::fs::read;
-
         use super::*;
+        use std::fs::read;
 
         #[test]
         fn torrent_info() {
@@ -489,15 +467,12 @@ mod tests {
             let expected_length = 92063;
             let expected_hash = "d69f91e6b2ae4c542468d1073a71d4ea13879a7f";
 
-            let info_hash_str = calculate_info_hash(&torrent)
-                .unwrap()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-
             assert_eq!(expected_tracker, torrent.announce);
             assert_eq!(expected_length, torrent.content_length());
-            assert_eq!(info_hash_str, expected_hash);
+            assert_eq!(
+                hex::encode(calculate_info_hash(&torrent).unwrap()),
+                expected_hash
+            );
         }
     }
 }
