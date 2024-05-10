@@ -1,23 +1,18 @@
 #![allow(unused)]
+use anyhow::Context;
 use clap::{Parser, Subcommand};
+use pieces::Pieces;
 use reqwest;
+use serde::{Deserialize, Serialize};
 use serde_bencode::value::Value as BenValue;
 use serde_json::Value as JsonValue;
 use sha1::{Digest, Sha1};
-use std::{
-    env,
-    fs::read,
-    io::Read,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
-
-use anyhow::Context;
+use std::{fs::read, path::PathBuf, str::FromStr};
 
 use SubCommand::*;
 
-fn decode_bencoded_value<B: AsRef<str>>(encoded_value: B) -> BenValue {
-    serde_bencode::from_str(encoded_value.as_ref()).expect("failed to deserialize bencode")
+fn decode_bencoded_value<B: AsRef<[u8]>>(encoded_value: B) -> BenValue {
+    serde_bencode::from_bytes(encoded_value.as_ref()).expect("failed to deserialize bencode")
 }
 
 fn bencode_to_json(bencode: &BenValue) -> JsonValue {
@@ -70,6 +65,71 @@ fn url_encode_infohash(bytes: &[u8]) -> String {
         .collect::<String>()
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Torrent {
+    // TODO: using a proper url
+    /// The URL of the tracker.
+    announce: String,
+
+    info: Info,
+}
+
+impl Torrent {
+    /// Calculate the total number of bytes for this torrent
+    fn content_length(&self) -> usize {
+        match self.info.content {
+            Content::SingleFile { length } => length,
+            Content::MultiFile { ref files } => files.iter().map(|file| file.length).sum(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Info {
+    /// The suggested name to save the file (or directory) as. It is purely advisory.
+    ///
+    /// In the single file case, the name key is the name of a file, in the muliple file case, it's
+    /// the name of a directory.
+    name: String,
+
+    /// The number of bytes in each piece the file is split into. For the purposes of transfer,
+    /// files are split into fixed-size pieces which are all the same length except for possibly
+    /// the last one which may be truncated. `piece_length` is almost always a power of two, most
+    /// commonly $2^{18} = 256K$ (BitTorrent prior to version 3.2 uses $2^{20} = 1M$ as default).
+    #[serde(rename = "piece length")]
+    piece_length: usize,
+
+    /// A bytestring whose length is a multiple of 20. It is to be subdivided into strings of
+    /// length 20, each of which is the SHA1 hash of the piece at the corresponding index.
+    pieces: Pieces,
+
+    /// There is also a key length or a key files, but not both or neither. otherwise it represents
+    /// a set of files which go in a directory structure.
+    #[serde(flatten)]
+    content: Content,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Content {
+    /// The `length` of the file in bytes
+    SingleFile { length: usize },
+
+    /// For the purposes of the other keys in the [`Info`], the multi-file case is treated as only having a single
+    /// file by concatenating the files in the order they appear in the files list.
+    MultiFile { files: Vec<TorrentFile> },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TorrentFile {
+    ///  The length of the file, in bytes.
+    length: usize,
+
+    /// A list of UTF-8 encoded strings corresponding to subdirectory names, the last of which is
+    /// the actual file name (a zero length list is an error case).
+    path: Vec<String>,
+}
+
 #[derive(Debug, Parser)]
 struct Cli {
     #[command(subcommand)]
@@ -95,89 +155,64 @@ enum SubCommand {
     },
 }
 
-// Usage: your_bittorrent.sh decode "<encoded_value>"
-fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    let command = &args[1];
+fn calculate_info_hash(torrent: &Torrent) -> anyhow::Result<Vec<u8>> {
+    let info_bytes =
+        serde_bencode::to_bytes(&torrent.info).expect("guaranteed to be a valid bencode");
+    let mut hasher = Sha1::new();
+    hasher.update(&info_bytes);
+    Ok(hasher.finalize().to_vec())
+}
 
+fn render_torrent_info(torrent: &Torrent) -> anyhow::Result<()> {
+    println!("Tracker URL: {}", torrent.announce);
+    println!("Length: {}", torrent.content_length());
+
+    let info_bytes = serde_bencode::to_bytes(&torrent.info).context("re-encode info section")?;
+    let info_hash = calculate_info_hash(&torrent).context("calculating info hash")?;
+
+    println!(
+        "Info Hash: {}",
+        info_hash
+            .iter()
+            .map(|byte| format!("{byte:02x?}"))
+            .collect::<String>()
+    );
+
+    println!("Piece Length: {}", torrent.info.piece_length);
+    let piece_hashes = torrent
+        .info
+        .pieces
+        .0
+        .iter()
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|byte| format!("{byte:02x?}"))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    println!("Piece Hashes:");
+    println!("{}", piece_hashes.join("\n"));
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Decode { bencode } => {
             let value =
-                serde_bencode::from_str::<BenValue>(&bencode).context("decoding bencode")?;
+                serde_bencode::from_str::<BenValue>(&bencode).context("bencode decoding")?;
             println!("{}", bencode_to_json(&value));
         }
-        Info { file_path } => {
-            let buf = read(&file_path)?;
-
-            let BenValue::Dict(meta) = decode_bencoded_value(String::from_utf8_lossy(&buf)) else {
-                panic!("No meta dict in torrent file");
-            };
-
-            let url = if let Some(BenValue::Bytes(url)) = meta.get("announce".as_bytes()) {
-                String::from_utf8_lossy(url)
-            } else {
-                panic!("No urls in the torrent file")
-            };
-
-            println!("Tracker URL: {url}");
-            let mut hasher = Sha1::new();
-            let (info, info_hash) = if let Some(info) = meta.get("info".as_bytes()) {
-                let info_bytes = serde_bencode::to_bytes(info).unwrap();
-                hasher.update(info_bytes);
-                let info_hash = hasher.finalize();
-
-                if let BenValue::Dict(info) = info {
-                    (info, info_hash)
-                } else {
-                    panic!("Fuck this shit")
-                }
-            } else {
-                panic!("No info in torrent file");
-            };
-
-            let length = if let Some(BenValue::Int(length)) = info.get("length".as_bytes()) {
-                length
-            } else {
-                panic!("No length in the torrent file");
-            };
-            println!("Length: {length}");
-
-            println!(
-                "Info Hash: {}",
-                info_hash
-                    .iter()
-                    .map(|byte| format!("{byte:02x?}"))
-                    .collect::<String>()
-            );
-
-            let piece_length =
-                if let BenValue::Int(piece_length) = info.get("piece length".as_bytes()).unwrap() {
-                    piece_length
-                } else {
-                    panic!("No piece length in info of torrent");
-                };
-            println!("Piece Length: {piece_length}");
-
-            let pieces = if let BenValue::Bytes(pieces) = info.get("pieces".as_bytes()).unwrap() {
-                pieces
-            } else {
-                panic!("No pieces in info of torrent");
-            };
-
-            println!("Piece Hashes:");
-            for chunk in pieces.chunks(20) {
-                let hash = chunk
-                    .iter()
-                    .map(|byte| format!("{byte:02x?}"))
-                    .collect::<String>();
-                println!("{hash}");
-            }
+        SubCommand::Info { file_path } => {
+            let buf = read(&file_path).context("opening torrent file")?;
+            let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
+            render_torrent_info(&torrent)?;
         }
         Peers { file_path } => {
             let buf = read(file_path).unwrap();
-            let decoded_value = decode_bencoded_value(String::from_utf8_lossy(&buf));
+            let decoded_value = decode_bencoded_value(&buf);
 
             let meta = if let BenValue::Dict(meta) = decoded_value {
                 meta
@@ -246,6 +281,65 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+mod pieces {
+    use serde::{
+        de::{self, Visitor},
+        Deserialize, Deserializer, Serialize,
+    };
+    use std::fmt;
+
+    #[derive(Debug)]
+    pub struct Pieces(pub Vec<[u8; 20]>);
+    struct PiecesVisitor;
+
+    impl<'de> Visitor<'de> for PiecesVisitor {
+        type Value = Pieces;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            write!(formatter, "a byte string whose length is a multiple of 20")
+        }
+
+        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            if v.len() % 20 != 0 {
+                return Err(E::custom(format!(
+                    "length is {length}, {length} mod 20 = {remainder}",
+                    length = v.len(),
+                    remainder = v.len() % 20
+                )));
+            }
+
+            // TODO: use [`std::slice::array_chunks`] when stable
+            Ok(Pieces(
+                v.chunks_exact(20)
+                    .map(|slice| slice.try_into().expect("guaranteed to be divisible by 20"))
+                    .collect(),
+            ))
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Pieces {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_bytes(PiecesVisitor)
+        }
+    }
+
+    impl Serialize for Pieces {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let hashes = self.0.concat();
+            serializer.serialize_bytes(&hashes)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -389,35 +483,21 @@ mod tests {
         #[test]
         fn torrent_info() {
             let buf = read("sample.torrent").unwrap();
+            let torrent: Torrent = serde_bencode::from_bytes(&buf).unwrap();
 
-            let expected_tracker = json!("http://bittorrent-test-tracker.codecrafters.io/announce");
-            let expected_length = json!(92063);
+            let expected_tracker = "http://bittorrent-test-tracker.codecrafters.io/announce";
+            let expected_length = 92063;
             let expected_hash = "d69f91e6b2ae4c542468d1073a71d4ea13879a7f";
 
-            let decoded_value = decode_bencoded_value(String::from_utf8_lossy(&buf));
-            let decoded_json = bencode_to_json(&decoded_value);
+            let info_hash_str = calculate_info_hash(&torrent)
+                .unwrap()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
 
-            let output_tracker = decoded_json.get("announce").unwrap();
-            assert_eq!(expected_tracker, *output_tracker);
-
-            let info = decoded_json.get("info").unwrap();
-            let output_length = info.get("length").unwrap();
-            assert_eq!(expected_length, *output_length);
-
-            use serde_bencode::value::Value;
-            let mut hasher = Sha1::new();
-            if let Value::Dict(meta) = decoded_value {
-                if let Some(dict) = meta.get("info".as_bytes()) {
-                    let bytes = serde_bencode::to_bytes(dict).unwrap();
-                    hasher.update(bytes);
-                    let output_hash = hasher.finalize();
-                    let output_hash = output_hash
-                        .iter()
-                        .map(|byte| format!("{byte:02x?}"))
-                        .collect::<String>();
-                    assert_eq!(expected_hash, output_hash);
-                }
-            }
+            assert_eq!(expected_tracker, torrent.announce);
+            assert_eq!(expected_length, torrent.content_length());
+            assert_eq!(info_hash_str, expected_hash);
         }
     }
 }
