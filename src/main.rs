@@ -174,7 +174,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Decode { bencode } => {
+        SubCommand::Decode { bencode } => {
             let value =
                 serde_bencode::from_str::<BenValue>(&bencode).context("bencode decoding")?;
             println!("{}", bencode_to_json(&value));
@@ -184,7 +184,7 @@ fn main() -> anyhow::Result<()> {
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
             render_torrent_info(&torrent)?;
         }
-        Peers { file_path } => {
+        SubCommand::Peers { file_path } => {
             let buf = read(file_path).unwrap();
             let decoded_value = decode_bencoded_value(buf);
 
