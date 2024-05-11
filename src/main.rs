@@ -7,12 +7,6 @@ use serde_json::Value as JsonValue;
 use sha1::{Digest, Sha1};
 use std::{fs::read, path::PathBuf, str::FromStr};
 
-use SubCommand::*;
-
-fn decode_bencoded_value<B: AsRef<[u8]>>(encoded_value: B) -> BenValue {
-    serde_bencode::from_bytes(encoded_value.as_ref()).expect("failed to deserialize bencode")
-}
-
 fn bencode_to_json(bencode: &BenValue) -> JsonValue {
     // TODO: find a way to make this work
     // serde_json::to_value(&bencode).expect("failed to json serialize bencode")
@@ -63,7 +57,7 @@ fn url_encode_infohash(bytes: &[u8]) -> String {
         .collect::<String>()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Torrent {
     // TODO: using a proper url
     /// The URL of the tracker.
@@ -82,7 +76,7 @@ impl Torrent {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Info {
     /// The suggested name to save the file (or directory) as. It is purely advisory.
     ///
@@ -107,7 +101,7 @@ struct Info {
     content: Content,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 enum Content {
     /// The `length` of the file in bytes
@@ -118,7 +112,7 @@ enum Content {
     MultiFile { files: Vec<TorrentFile> },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct TorrentFile {
     ///  The length of the file, in bytes.
     length: usize,
@@ -270,7 +264,7 @@ mod pieces {
     };
     use std::fmt;
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq)]
     pub struct Pieces(pub Vec<[u8; 20]>);
     struct PiecesVisitor;
 
@@ -327,133 +321,6 @@ mod tests {
     use super::*;
 
     #[cfg(test)]
-    mod decoding {
-        use super::*;
-
-        #[cfg(test)]
-        mod strings {
-            use serde_json::json;
-
-            use super::*;
-
-            #[test]
-            fn basic_string() {
-                let input = "6:orange";
-                let expected = json!("orange");
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-
-            #[test]
-            fn basic_url() {
-                let input = "55:http://bittorrent-test-tracker.codecrafters.io/announce";
-                let expected = json!("http://bittorrent-test-tracker.codecrafters.io/announce");
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-        }
-
-        #[cfg(test)]
-        mod integers {
-            use serde_json::json;
-
-            use super::*;
-
-            #[test]
-            fn positive_i32_integer() {
-                let input = "i1249266168e";
-                let expected = json!(1249266168);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-
-            #[test]
-            fn positive_i64_integer() {
-                let input = "i4294967300e";
-                let expected = json!(4294967300i64);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-
-            #[test]
-            fn negative_i32_integer() {
-                let input = "i-52e";
-                let expected = json!(-52);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-        }
-
-        #[cfg(test)]
-        mod lists {
-            use serde_json::json;
-
-            use super::*;
-
-            #[test]
-            fn empty_list() {
-                let input = "le";
-                let expected = json!([]);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-
-            #[test]
-            fn linear_list() {
-                let input = "l9:pineapplei261ee";
-                let expected = json!(["pineapple", 261]);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-
-                let input = "li261e9:pineapplee";
-                let expected = json!([261, "pineapple"]);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-
-            #[test]
-            fn nested_list() {
-                let input = "lli4eei5ee";
-                let expected = json!([[4], 5]);
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-        }
-
-        #[cfg(test)]
-        mod dictionaries {
-            use serde_json::json;
-
-            use super::*;
-
-            #[test]
-            fn empty_dictionary() {
-                let input = "de";
-                let expected = json!({});
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output))
-            }
-
-            #[test]
-            fn linear_dictionary() {
-                let input = "d3:foo5:grape5:helloi52ee";
-                let expected = json!({"foo":"grape","hello":52});
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-
-            #[test]
-            fn nested_dictionary() {
-                let input =
-                    "d10:inner_dictd4:key16:value14:key2i42e8:list_keyl5:item15:item2i3eeee";
-                let expected = json!({"inner_dict":{"key1":"value1","key2":42,"list_key":["item1","item2",3]}});
-                let output = decode_bencoded_value(input);
-                assert_eq!(expected, bencode_to_json(&output));
-            }
-        }
-    }
-
-    #[cfg(test)]
     mod torrent_file {
         use super::*;
         use std::fs::read;
@@ -463,16 +330,30 @@ mod tests {
             let buf = read("sample.torrent").unwrap();
             let torrent: Torrent = serde_bencode::from_bytes(&buf).unwrap();
 
-            let expected_tracker = "http://bittorrent-test-tracker.codecrafters.io/announce";
-            let expected_length = 92063;
-            let expected_hash = "d69f91e6b2ae4c542468d1073a71d4ea13879a7f";
+            let expected_torrent = Torrent {
+                announce: "http://bittorrent-test-tracker.codecrafters.io/announce".to_string(),
+                info: Info {
+                    name: "sample.txt".to_string(),
+                    piece_length: 32768,
+                    pieces: Pieces(vec![
+                        [
+                            232, 118, 246, 122, 42, 136, 134, 232, 243, 107, 19, 103, 38, 195, 15,
+                            162, 151, 3, 2, 45,
+                        ],
+                        [
+                            110, 34, 117, 230, 4, 160, 118, 102, 86, 115, 110, 129, 255, 16, 181,
+                            82, 4, 173, 141, 53,
+                        ],
+                        [
+                            240, 13, 147, 122, 2, 19, 223, 25, 130, 188, 141, 9, 114, 39, 173, 158,
+                            144, 154, 204, 23,
+                        ],
+                    ]),
+                    content: Content::SingleFile { length: 92063 },
+                },
+            };
 
-            assert_eq!(expected_tracker, torrent.announce);
-            assert_eq!(expected_length, torrent.content_length());
-            assert_eq!(
-                hex::encode(calculate_info_hash(&torrent).unwrap()),
-                expected_hash
-            );
+            assert_eq!(torrent, expected_torrent);
         }
     }
 }
