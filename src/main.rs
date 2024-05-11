@@ -37,24 +37,11 @@ fn bencode_to_json(bencode: &BenValue) -> JsonValue {
     }
 }
 
-fn url_encode_infohash(bytes: &[u8]) -> String {
+fn urlencode(bytes: &[u8]) -> String {
     bytes
         .iter()
-        .map(|&byte| {
-            if byte.is_ascii_digit()
-                || byte.is_ascii_uppercase()
-                || byte.is_ascii_lowercase()
-                || byte == b'-'
-                || byte == b'_'
-                || byte == b'.'
-                || byte == b'~'
-            {
-                format!("{}", byte as char)
-            } else {
-                format!("%{byte:02x?}")
-            }
-        })
-        .collect::<String>()
+        .map(|&byte| format!("%{}", hex::encode(&[byte])))
+        .collect()
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -185,43 +172,14 @@ fn main() -> anyhow::Result<()> {
             render_torrent_info(&torrent)?;
         }
         SubCommand::Peers { file_path } => {
-            let buf = read(file_path).unwrap();
-            let decoded_value = decode_bencoded_value(buf);
+            let buf = read(file_path).context("opening torrent file")?;
+            let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
 
-            let meta = if let BenValue::Dict(meta) = decoded_value {
-                meta
-            } else {
-                panic!("No meta dict in torrent file");
-            };
+            let tracker_url = &torrent.announce;
+            let info_hash = calculate_info_hash(&torrent)?;
+            let length = torrent.content_length();
 
-            let tracker_url = if let Some(BenValue::Bytes(url)) = meta.get("announce".as_bytes()) {
-                String::from_utf8_lossy(url)
-            } else {
-                panic!("No tracker url in torrent file");
-            };
-
-            let mut hasher = Sha1::new();
-            let (info, info_hash) = if let Some(info) = meta.get("info".as_bytes()) {
-                let info_bytes = serde_bencode::to_bytes(info).unwrap();
-                hasher.update(info_bytes);
-                let info_hash = hasher.finalize();
-
-                if let BenValue::Dict(info) = info {
-                    (info, info_hash)
-                } else {
-                    panic!("Fuck this shit")
-                }
-            } else {
-                panic!("No info in torrent file");
-            };
-
-            let length = if let Some(BenValue::Int(length)) = info.get("length".as_bytes()) {
-                length
-            } else {
-                panic!("No length in torrent file");
-            };
-
-            let info_hash_url = url_encode_infohash(&info_hash);
+            let info_hash_url = urlencode(&info_hash);
             let peer_id = "36525524767213958416";
             let port = 6881;
             let uploaded = 0;
@@ -241,16 +199,16 @@ fn main() -> anyhow::Result<()> {
             url.set_port(Some(port)).unwrap();
 
             let client = reqwest::blocking::Client::new();
-            // let request = client
-            //     .get(url)
-            //     .query(&query)
-            //     .query(&[("info_hash", &info_hash)]);
-            //
-            // println!("{request:#?}");
-            //
-            // if let Ok(response) = request.send() {
-            //     println!("{response:?}");
-            // }
+            let request = client
+                .get(url)
+                .query(&query)
+                .query(&[("info_hash", &info_hash)]);
+
+            println!("{request:#?}");
+
+            if let Ok(response) = request.send() {
+                println!("{response:?}");
+            }
         }
     }
 
