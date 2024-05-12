@@ -2,7 +2,6 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use serde_bencode::value::Value as BenValue;
 use serde_json::Value as JsonValue;
-use sha1::{Digest, Sha1};
 use std::{fs::read, path::PathBuf, str::FromStr};
 
 use bittorrent_starter_rust::torrent::Torrent;
@@ -69,16 +68,8 @@ enum SubCommand {
     },
 }
 
-fn calculate_info_hash(torrent: &Torrent) -> anyhow::Result<Vec<u8>> {
-    let info_bytes =
-        serde_bencode::to_bytes(&torrent.info).expect("guaranteed to be a valid bencode");
-    let mut hasher = Sha1::new();
-    hasher.update(&info_bytes);
-    Ok(hasher.finalize().to_vec())
-}
-
 fn render_torrent_info(torrent: &Torrent) -> anyhow::Result<()> {
-    let info_hash = calculate_info_hash(torrent).context("calculating info hash")?;
+    let info_hash = torrent.calculate_info_hash();
 
     println!("Tracker URL: {}", torrent.announce);
     println!("Length: {}", torrent.content_length());
@@ -111,7 +102,7 @@ fn main() -> anyhow::Result<()> {
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
 
             let tracker_url = &torrent.announce;
-            let info_hash = calculate_info_hash(&torrent)?;
+            let info_hash = torrent.calculate_info_hash();
             let length = torrent.content_length();
 
             let info_hash_url = urlencode(&info_hash);

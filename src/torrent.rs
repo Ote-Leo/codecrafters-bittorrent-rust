@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub use pieces::Pieces;
+use sha1::{Digest, Sha1};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Torrent {
@@ -18,6 +19,15 @@ impl Torrent {
             Content::SingleFile { length } => length,
             Content::MultiFile { ref files } => files.iter().map(|file| file.length).sum(),
         }
+    }
+
+    /// The sha1 hash of ben-encoding the [`Torrent::info`] section of the torrent.
+    pub fn calculate_info_hash(&self) -> [u8; 20] {
+        let info_bytes =
+            serde_bencode::to_bytes(&self.info).expect("guaranteed to be a valid bencode");
+        let mut hasher = Sha1::new();
+        hasher.update(&info_bytes);
+        hasher.finalize().into()
     }
 }
 
@@ -52,8 +62,8 @@ pub enum Content {
     /// The `length` of the file in bytes
     SingleFile { length: usize },
 
-    /// For the purposes of the other keys in the [`Info`], the multi-file case is treated as only having a single
-    /// file by concatenating the files in the order they appear in the files list.
+    /// For the purposes of the other keys in the [`Info`], the multi-file case is treated as only
+    /// having a single file by concatenating the files in the order they appear in the files list.
     MultiFile { files: Vec<TorrentFile> },
 }
 
