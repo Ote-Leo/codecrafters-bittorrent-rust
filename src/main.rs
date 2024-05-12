@@ -2,9 +2,12 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use serde_bencode::value::Value as BenValue;
 use serde_json::Value as JsonValue;
-use std::{fs::read, path::PathBuf, str::FromStr};
+use std::{fs::read, path::PathBuf};
 
-use bittorrent_starter_rust::torrent::Torrent;
+use bittorrent_starter_rust::{
+    torrent::Torrent,
+    tracker::{TrackerRequest, TrackerResponse},
+};
 
 fn bencode_to_json(bencode: &BenValue) -> JsonValue {
     // TODO: find a way to make this work
@@ -37,10 +40,12 @@ fn bencode_to_json(bencode: &BenValue) -> JsonValue {
 }
 
 fn urlencode(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&byte| format!("%{}", hex::encode(&[byte])))
-        .collect()
+    let mut result = String::with_capacity(3 * bytes.len());
+    for &byte in bytes {
+        result.push('%');
+        result.push_str(&hex::encode(&[byte]));
+    }
+    result
 }
 
 #[derive(Debug, Parser)]
@@ -105,35 +110,20 @@ fn main() -> anyhow::Result<()> {
             let info_hash = torrent.calculate_info_hash();
             let length = torrent.content_length();
 
-            let info_hash_url = urlencode(&info_hash);
-            let peer_id = "36525524767213958416";
-            let port = 6881;
-            let uploaded = 0;
-            let downloaded = 0;
-            let left = length;
-            let compact = 1;
+            let tracker_url = {
+                let info_hash_url = urlencode(&info_hash);
+                let tracker_request = TrackerRequest::new(length);
+                let tracker_request = serde_urlencoded::to_string(&tracker_request)
+                    .context("url-encoding tracker")?;
+                format!("{tracker_url}?{tracker_request}&info_hash={info_hash_url}")
+            };
 
-            let query = [
-                ("peer_id", "36525524767213958416".into()),
-                ("downloaded", "0".into()),
-                ("uploaded", "0".into()),
-                ("left", length.to_string()),
-                ("compact", "1".into()),
-            ];
-
-            let mut url = reqwest::Url::from_str(&tracker_url).unwrap();
-            url.set_port(Some(port)).unwrap();
-
-            let client = reqwest::blocking::Client::new();
-            let request = client
-                .get(url)
-                .query(&query)
-                .query(&[("info_hash", &info_hash)]);
-
-            println!("{request:#?}");
-
-            if let Ok(response) = request.send() {
-                println!("{response:?}");
+            let response = reqwest::blocking::get(tracker_url).context("tracker get request")?;
+            let response = response.bytes().context("reading response bytes")?;
+            let response: TrackerResponse =
+                serde_bencode::from_bytes(&response).context("bendecoding response")?;
+            for peer in response.peers.0.iter() {
+                println!("{peer}");
             }
         }
     }
