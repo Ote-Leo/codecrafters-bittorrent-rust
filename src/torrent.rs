@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display};
 
 pub use pieces::Pieces;
 use sha1::{Digest, Sha1};
@@ -28,6 +29,22 @@ impl Torrent {
         let mut hasher = Sha1::new();
         hasher.update(&info_bytes);
         hasher.finalize().into()
+    }
+}
+
+impl Display for Torrent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let info_hash = self.calculate_info_hash();
+
+        writeln!(f, "Tracker URL: {}", self.announce)?;
+        writeln!(f, "Length: {}", self.content_length())?;
+        writeln!(f, "Info Hash: {}", hex::encode(info_hash))?;
+        writeln!(f, "Piece Length: {}", self.info.piece_length)?;
+        writeln!(f, "Piece Hashes:")?;
+        for piece in self.info.pieces.0.iter() {
+            writeln!(f, "{}", hex::encode(piece))?;
+        }
+        Ok(())
     }
 }
 

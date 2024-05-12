@@ -73,21 +73,6 @@ enum SubCommand {
     },
 }
 
-fn render_torrent_info(torrent: &Torrent) -> anyhow::Result<()> {
-    let info_hash = torrent.calculate_info_hash();
-
-    println!("Tracker URL: {}", torrent.announce);
-    println!("Length: {}", torrent.content_length());
-    println!("Info Hash: {}", hex::encode(info_hash));
-    println!("Piece Length: {}", torrent.info.piece_length);
-    println!("Piece Hashes:");
-    for piece in torrent.info.pieces.0.iter() {
-        println!("{}", hex::encode(piece))
-    }
-
-    Ok(())
-}
-
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -100,7 +85,7 @@ fn main() -> anyhow::Result<()> {
         SubCommand::Info { file_path } => {
             let buf = read(file_path).context("opening torrent file")?;
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
-            render_torrent_info(&torrent)?;
+            println!("{torrent}");
         }
         SubCommand::Peers { file_path } => {
             let buf = read(file_path).context("opening torrent file")?;
