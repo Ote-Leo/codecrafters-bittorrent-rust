@@ -74,7 +74,7 @@ pub struct TrackerResponse {
 mod peers {
     use serde::{
         de::{self, Visitor},
-        Deserialize, Deserializer, Serialize,
+        Deserialize, Deserializer, Serialize, Serializer,
     };
     use std::{
         fmt,
@@ -133,7 +133,7 @@ mod peers {
     impl Serialize for Peers {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
-            S: serde::Serializer,
+            S: Serializer,
         {
             let mut bytes = Vec::with_capacity(6 * self.0.len());
 

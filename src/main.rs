@@ -43,7 +43,7 @@ fn urlencode(bytes: &[u8]) -> String {
     let mut result = String::with_capacity(3 * bytes.len());
     for &byte in bytes {
         result.push('%');
-        result.push_str(&hex::encode(&[byte]));
+        result.push_str(&hex::encode([byte]));
     }
     result
 }
@@ -98,8 +98,8 @@ fn main() -> anyhow::Result<()> {
             let tracker_url = {
                 let info_hash_url = urlencode(&info_hash);
                 let tracker_request = TrackerRequest::new(length);
-                let tracker_request = serde_urlencoded::to_string(&tracker_request)
-                    .context("url-encoding tracker")?;
+                let tracker_request =
+                    serde_urlencoded::to_string(tracker_request).context("url-encoding tracker")?;
                 format!("{tracker_url}?{tracker_request}&info_hash={info_hash_url}")
             };
 

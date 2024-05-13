@@ -97,7 +97,7 @@ pub struct TorrentFile {
 mod pieces {
     use serde::{
         de::{self, Visitor},
-        Deserialize, Deserializer, Serialize,
+        Deserialize, Deserializer, Serialize, Serializer,
     };
     use std::fmt;
 
@@ -145,7 +145,7 @@ mod pieces {
     impl Serialize for Pieces {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
-            S: serde::Serializer,
+            S: Serializer,
         {
             let hashes = self.0.concat();
             serializer.serialize_bytes(&hashes)
