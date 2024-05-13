@@ -2,9 +2,15 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use serde_bencode::value::Value as BenValue;
 use serde_json::Value as JsonValue;
-use std::{fs::read, path::PathBuf};
+use std::{
+    fs::read,
+    io::{Read, Write},
+    net::{SocketAddrV4, TcpStream},
+    path::PathBuf,
+};
 
 use bittorrent_starter_rust::{
+    peer::HandShake,
     torrent::Torrent,
     tracker::{TrackerRequest, TrackerResponse},
 };
@@ -71,6 +77,14 @@ enum SubCommand {
         /// Path to the torrent file
         file_path: PathBuf,
     },
+    /// Establish a peer handshake for a given torrent file
+    #[clap(name = "handshake")]
+    HandShake {
+        /// Path to the torrent file
+        file_path: PathBuf,
+        /// Add of the peer
+        peer: SocketAddrV4,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -110,6 +124,21 @@ fn main() -> anyhow::Result<()> {
             for peer in response.peers.0.iter() {
                 println!("{peer}");
             }
+        }
+        SubCommand::HandShake { file_path, peer } => {
+            let buf = read(file_path).context("opening torrent file")?;
+            let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
+
+            let info_hash = torrent.calculate_info_hash();
+            let mut stream =
+                TcpStream::connect(peer).context("establishing connection with peer")?;
+            let handshake = HandShake::new(info_hash);
+
+            let mut bytes: [u8; 68] = handshake.into();
+            stream.write_all(&bytes).context("sending handshake")?;
+            stream.read(&mut bytes).context("receiving handshake")?;
+            let handshake: HandShake = bytes.try_into().context("converting handshake")?;
+            println!("{}", hex::encode(handshake.peer_id));
         }
     }
 
