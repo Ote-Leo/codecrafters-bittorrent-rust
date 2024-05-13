@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
             stream.write_all(&bytes).context("sending handshake")?;
             stream.read(&mut bytes).context("receiving handshake")?;
             let handshake: HandShake = bytes.try_into().context("converting handshake")?;
-            println!("{}", hex::encode(handshake.peer_id));
+            println!("Peer ID: {}", hex::encode(handshake.peer_id));
         }
     }
 
