@@ -45,13 +45,50 @@ fn bencode_to_json(bencode: &BenValue) -> JsonValue {
     }
 }
 
-fn urlencode(bytes: &[u8]) -> String {
-    let mut result = String::with_capacity(3 * bytes.len());
-    for &byte in bytes {
+fn urlencode<B: AsRef<[u8]>>(bytes: B) -> String {
+    let mut result = String::with_capacity(3 * bytes.as_ref().len());
+    for &byte in bytes.as_ref() {
         result.push('%');
         result.push_str(&hex::encode([byte]));
     }
     result
+}
+
+fn extract_peers(torrent: &Torrent, info_hash: Option<[u8; 20]>) -> anyhow::Result<Peers> {
+    let tracker_url = {
+        let announce = &torrent.announce;
+        let info_hash_url = urlencode(info_hash.unwrap_or_else(|| torrent.calculate_info_hash()));
+        let tracker_request = TrackerRequest::new(torrent.content_length());
+        let tracker_request =
+            serde_urlencoded::to_string(tracker_request).context("url-encoding tracker")?;
+        format!("{announce}?{tracker_request}&info_hash={info_hash_url}")
+    };
+
+    let response = reqwest::blocking::get(tracker_url)
+        .context("tracker get request")?
+        .bytes()
+        .context("reading response bytes")?;
+    let response: TrackerResponse =
+        serde_bencode::from_bytes(&response).context("bendecoding response")?;
+
+    Ok(response.peers)
+}
+
+type PeerId = [u8; 20];
+
+fn establish_handshake(
+    torrent: &Torrent,
+    peer: &SocketAddrV4,
+    info_hash: Option<[u8; 20]>,
+) -> anyhow::Result<(TcpStream, PeerId)> {
+    let mut stream = TcpStream::connect(peer).context("establishing connection with peer")?;
+    let handshake = HandShake::new(info_hash.unwrap_or_else(|| torrent.calculate_info_hash()));
+
+    let mut bytes: [u8; 68] = handshake.into();
+    stream.write_all(&bytes).context("sending handshake")?;
+    stream.read(&mut bytes).context("receiving handshake")?;
+    let handshake: HandShake = bytes.try_into().context("converting handshake")?;
+    Ok((stream, handshake.peer_id))
 }
 
 #[derive(Debug, Parser)]
@@ -105,23 +142,7 @@ fn main() -> anyhow::Result<()> {
             let buf = read(file_path).context("opening torrent file")?;
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
 
-            let tracker_url = &torrent.announce;
-            let info_hash = torrent.calculate_info_hash();
-            let length = torrent.content_length();
-
-            let tracker_url = {
-                let info_hash_url = urlencode(&info_hash);
-                let tracker_request = TrackerRequest::new(length);
-                let tracker_request =
-                    serde_urlencoded::to_string(tracker_request).context("url-encoding tracker")?;
-                format!("{tracker_url}?{tracker_request}&info_hash={info_hash_url}")
-            };
-
-            let response = reqwest::blocking::get(tracker_url).context("tracker get request")?;
-            let response = response.bytes().context("reading response bytes")?;
-            let response: TrackerResponse =
-                serde_bencode::from_bytes(&response).context("bendecoding response")?;
-            for peer in response.peers.0.iter() {
+            for peer in extract_peers(&torrent, None)?.0.iter() {
                 println!("{peer}");
             }
         }
