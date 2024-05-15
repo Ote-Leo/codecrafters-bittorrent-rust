@@ -10,7 +10,9 @@ use std::{
 };
 
 use bittorrent_starter_rust::{
-    peer::{download_piece, initiate_download, validate_piece, HandShake},
+    peer::{
+        download_piece, initiate_download, send_message, validate_piece, HandShake, PeerMessage,
+    },
     torrent::Torrent,
     tracker::{Peers, TrackerRequest, TrackerResponse},
 };
@@ -135,6 +137,14 @@ enum SubCommand {
         /// Piece index to download
         piece_index: usize,
     },
+    /// Download a  torrent
+    Download {
+        /// Path to place the torrent
+        #[clap(short, long)]
+        output: PathBuf,
+        /// Path to the torrent file
+        file_path: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -199,6 +209,40 @@ fn main() -> anyhow::Result<()> {
 
             println!(
                 "Piece {piece_index} downloaded to {}.",
+                output.as_path().display()
+            );
+        }
+        SubCommand::Download { output, file_path } => {
+            let buf = read(&file_path).context("opening torrent file")?;
+            let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
+
+            let info_hash = torrent.calculate_info_hash();
+            let mut peers = extract_peers(&torrent, Some(info_hash.clone()))?;
+            // TODO: pick peers in smarter way
+            let Some(peer) = peers.0.pop() else {
+                bail!("the torrent doesn't have any peers")
+            };
+            let mut file = File::create(&output).context("creating output file")?;
+
+            // TODO : propbably some async 😅
+            for piece_index in 0..torrent.info.pieces.0.len() {
+                let (mut stream, _) = establish_handshake(&torrent, &peer, Some(info_hash))?;
+                initiate_download(&mut stream)?;
+                let piece = download_piece(&mut stream, &torrent, piece_index, BLOCK_SIZE)?;
+                validate_piece(&torrent, piece_index, &piece)?;
+                file.write_all(&piece)
+                    .context(format!("writing piece {piece_index} to file"))?;
+                send_message(
+                    &mut stream,
+                    PeerMessage::Have {
+                        piece_index: piece_index as u32,
+                    },
+                )?;
+            }
+
+            println!(
+                "Downloaded {} to {}.",
+                file_path.display(),
                 output.as_path().display()
             );
         }
