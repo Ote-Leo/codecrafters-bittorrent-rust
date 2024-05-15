@@ -329,7 +329,7 @@ pub fn send_message(stream: &mut TcpStream, message: PeerMessage) -> anyhow::Res
         .context(format!("sending message length of {}", message_buf.len()))?;
     stream
         .write_all(message_buf.as_slice())
-        .context(format!("sending message"))?;
+        .context("sending message message")?;
     stream.flush()?;
     Ok(())
 }
@@ -376,7 +376,7 @@ pub fn download_piece(
     block_size: u32,
 ) -> anyhow::Result<Vec<u8>> {
     let (piece_length, block_count, last_block_length) =
-        calculate_block_length(&torrent, piece_index, block_size);
+        calculate_block_length(torrent, piece_index, block_size);
 
     let mut piece = vec![0u8; piece_length];
 
@@ -463,7 +463,7 @@ pub fn validate_piece(torrent: &Torrent, piece_index: usize, piece: &[u8]) -> an
     let slice_hash = torrent.info.pieces.0[piece_index];
     let current_hash: [u8; 20] = {
         let mut hasher = Sha1::new();
-        hasher.update(&piece);
+        hasher.update(piece);
         hasher.finalize().into()
     };
 

@@ -189,7 +189,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             let info_hash = torrent.calculate_info_hash();
-            let mut peers = extract_peers(&torrent, Some(info_hash.clone()))?;
+            let mut peers = extract_peers(&torrent, Some(info_hash))?;
             // TODO: pick peers in smarter way
             let Some(peer) = peers.0.pop() else {
                 bail!("the torrent doesn't have any peers")
@@ -217,7 +217,7 @@ fn main() -> anyhow::Result<()> {
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
 
             let info_hash = torrent.calculate_info_hash();
-            let mut peers = extract_peers(&torrent, Some(info_hash.clone()))?;
+            let mut peers = extract_peers(&torrent, Some(info_hash))?;
             // TODO: pick peers in smarter way
             let Some(peer) = peers.0.pop() else {
                 bail!("the torrent doesn't have any peers")
