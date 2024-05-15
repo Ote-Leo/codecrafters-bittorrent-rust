@@ -1,19 +1,21 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use serde_bencode::value::Value as BenValue;
 use serde_json::Value as JsonValue;
 use std::{
-    fs::read,
+    fs::{read, File},
     io::{Read, Write},
     net::{SocketAddrV4, TcpStream},
     path::PathBuf,
 };
 
 use bittorrent_starter_rust::{
-    peer::HandShake,
+    peer::{download_piece, initiate_download, validate_piece, HandShake},
     torrent::Torrent,
-    tracker::{TrackerRequest, TrackerResponse},
+    tracker::{Peers, TrackerRequest, TrackerResponse},
 };
+
+const BLOCK_SIZE: u32 = 1 << 14;
 
 fn bencode_to_json(bencode: &BenValue) -> JsonValue {
     // TODO: find a way to make this work
@@ -98,6 +100,7 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[clap(rename_all = "snake_case")]
 enum SubCommand {
     /// Decode becoded data into json
     Decode {
@@ -121,6 +124,16 @@ enum SubCommand {
         file_path: PathBuf,
         /// Add of the peer
         peer: SocketAddrV4,
+    },
+    /// Download a specific piece from a torrent
+    DownloadPiece {
+        /// Path to place the piece in
+        #[clap(short, long)]
+        output: PathBuf,
+        /// Path to the torrent file
+        file_path: PathBuf,
+        /// Piece index to download
+        piece_index: usize,
     },
 }
 
@@ -149,17 +162,45 @@ fn main() -> anyhow::Result<()> {
         SubCommand::HandShake { file_path, peer } => {
             let buf = read(file_path).context("opening torrent file")?;
             let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
+            let (_, peer_id) = establish_handshake(&torrent, &peer, None)?;
+            println!("Peer ID: {}", hex::encode(peer_id));
+        }
+        SubCommand::DownloadPiece {
+            output,
+            file_path,
+            piece_index,
+        } => {
+            let buf = read(file_path).context("opening torrent file")?;
+            let torrent: Torrent = serde_bencode::from_bytes(&buf).context("parse torrent file")?;
+
+            let pieces_count = torrent.info.pieces.0.len();
+            if piece_index >= pieces_count {
+                bail!("index {piece_index} out of {pieces_count}")
+            }
 
             let info_hash = torrent.calculate_info_hash();
-            let mut stream =
-                TcpStream::connect(peer).context("establishing connection with peer")?;
-            let handshake = HandShake::new(info_hash);
+            let mut peers = extract_peers(&torrent, Some(info_hash.clone()))?;
+            // TODO: pick peers in smarter way
+            let Some(peer) = peers.0.pop() else {
+                bail!("the torrent doesn't have any peers")
+            };
 
-            let mut bytes: [u8; 68] = handshake.into();
-            stream.write_all(&bytes).context("sending handshake")?;
-            stream.read(&mut bytes).context("receiving handshake")?;
-            let handshake: HandShake = bytes.try_into().context("converting handshake")?;
-            println!("Peer ID: {}", hex::encode(handshake.peer_id));
+            let (mut stream, _) = establish_handshake(&torrent, &peer, Some(info_hash))?;
+
+            initiate_download(&mut stream)?;
+            let piece = download_piece(&mut stream, &torrent, piece_index, BLOCK_SIZE)?;
+            validate_piece(&torrent, piece_index, &piece)?;
+
+            // saving to disk
+            let mut piece_file = File::create(&output).context("creating output file")?;
+            piece_file
+                .write_all(&piece)
+                .context("writing piece to file")?;
+
+            println!(
+                "Piece {piece_index} downloaded to {}.",
+                output.as_path().display()
+            );
         }
     }
 
